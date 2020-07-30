@@ -1,0 +1,215 @@
+!Writen for:用于考虑盾构隧道接触非线性的纵向力学分析(2D)
+!Longitudinal mechanical analysis of shield tunnel considering contact nonlinearity (2D)
+!Main variables: segx-->盾构隧道结构及力学参数
+!          I0,A0-->连续结构惯性矩和面积
+!          boltx-->纵向螺栓相关参数
+!          cy_x-->非线性迭代相关参数
+!Coordinate system: z轴为隧道纵向，y轴为隧道横向，z的范围为0~segL*segN
+!Element Type:beam188隧道梁单元（长度为segL），combin14地基弹簧，
+!Input:disz.txt和disy.txt,用于输入地基弹簧末端地层位移，为单列文本，每个元素为行号对应节点的地基位移量，放在当前目录中
+!Result:程序运行后生成结构轴力、剪力、弯矩的截图，保存在当前目录，且生成result.txt文件，内含结构内力、节点位移、接头内部响应等
+!Analysis platform: Ansys
+!Authors:Chen Pingliang. Ph.D. candidate
+!Email:416122499@qq.com
+!Institution:Southwest Jiaotong University
+!Date: 2020-07
+
+finish
+/clear
+/prep7
+
+!建立节点
+segL=2.0
+segN=50.0
+*do,i,1,segN,1
+    n,,0,0,segL/2+(i-1)*segL
+*enddo
+*do,i,1,segN,1
+    n,,0,0.4,segL/2+(i-1)*segL
+*enddo
+*do,i,1,segN,1
+    n,,0,0,segL/2+(i-1)*segL+0.4
+*enddo
+!建立单元
+segt=0.6
+segR=6.7
+!soilK=100.0e6
+segEc=36.0e9
+I0=3.14*segR*segR*segR*segt
+A0=2*3.14*segR*segt
+et,1,BEAM188
+mp,ex,1,segEc
+mp,prxy,1,0.2
+r,1
+mat,1
+real,1
+type,1
+*do,i,1,segN-1,1
+    sectype,i,beam,asec
+    secdata,A0,I0,,I0,,1.0
+    secnum,i
+    e,i,i+1
+*enddo
+et,2,combin14
+r,2,1820.0e6!soilK*(segR*2+segt)*segL
+et,3,combin14
+r,3,607.0e6!soilK*(segR*2+segt)*segL/3
+*do,i,1,segN,1
+    real,2
+    type,2
+    e,i,i+segN
+    real,3
+    type,3
+    e,i,i+segN*2
+*enddo
+!添加荷载
+allsel
+d,all,ux,0.0
+*dim,disz,,segN
+*dim,disy,,segN
+*vread,disz,disz,txt,,,
+(1F5.3)
+*vread,disy,disy,txt,,,
+(1F5.3)
+*do,i,1,segN,1
+    d,i+segN,uy,disy(i)
+    d,i+segN*2,uz,disz(i)
+*enddo
+!计算
+boltN=56
+boltL=0.44
+boltD=0.036
+boltE=210.0e9
+kkj=1/boltL*boltE*3.14*boltD*boltD/4
+kj=kkj*boltN/2/3.14/segR
+de=kj/(segEc*segt+segL*kj)
+cy_var=1.0
+cy_tol=10.0
+cy_count=0
+*dim,cy_cofiStor,,segN
+*dim,EA,,segN-1
+*dim,EI,,segN-1
+*dim,disu,,segN-1
+*dim,disv,,segN-1
+*dim,disth,,segN-1
+*dim,N,,segN-1
+*dim,V,,segN-1
+*dim,M,,segN-1
+*dim,hc,,segN-1
+*dim,o1,,segN-1
+*dim,o2,,segN-1
+*dim,p1,,segN-1
+*dim,p2,,segN-1
+*vfill,EA,data,segEc*A0
+*vfill,EI,data,segEc*I0
+*dim,l1,,segN-1
+*dim,l2,,segN-1
+/solu
+solve
+*dowhile,cy_var
+    /solu
+    solve
+    cy_count=cy_count+1
+    cy_cofi=0.
+    *do,i,1,segN-1,1
+        *get, n1u, node, i, u, z
+        *get, n1v, node, i, u, y
+        *get, n2u, node, i+1, u, z
+        *get, n2v, node, i+1, u, y
+        *get, n1theta, node, i, rot, x
+        *get, n2theta, node, i+1, rot, x
+        uu=n1u-n2u
+        th=n1theta-n2theta
+        eu=abs(th)*segR/uu
+        lamuda1=(de+1)/2+eu*(de-1)/12*(abs(1/eu-1)+abs(1/eu+1)+4*abs(1/eu))
+        lamuda2=(de+1)/2-(de-1)/6*(abs(1/eu-1)-abs(1/eu+1))
+        l1(i)=lamuda1
+        l2(i)=lamuda2
+        lamuda1=0.8
+        lamuda2=0.4
+        sectype,i,beam,asec
+        secdata,A0*lamuda1,I0*lamuda2,,I0*lamuda2,,1.0
+        oldEA=EA(i)
+        oldEI=EI(i)
+        newEA=segEc*A0*lamuda1
+        newEI=segEc*I0*lamuda2
+        cy_cofi=cy_cofi+abs(newEA-oldEA)+abs(newEI-oldEI)
+        EA(i)=newEA
+        EI(i)=newEI 
+    *enddo
+    cy_cofiStor(cy_count)=cy_cofi
+    /solu
+    solve
+    *if, cy_cofi, lt, cy_tol, or, cy_count, gt, 100, then
+        cy_var=-1.0
+        /post1
+        *do,i,1,segN-1,1
+            *get, n1u, node, i, u, z
+            *get, n1v, node, i, u, y
+            *get, n2u, node, i+1, u, z
+            *get, n2v, node, i+1, u, y
+            *get, n1theta, node, i, rot, x
+            *get, n2theta, node, i+1, rot, x
+            *GET,var_Ni, ELEM, i, SMISC, 1
+            *GET,var_Nj, ELEM, i, SMISC, 14 
+            *GET,var_Vi, ELEM, i, SMISC, 6 
+            *GET,var_Vj, ELEM, i, SMISC, 19 
+            *GET,var_Mi, ELEM, i, SMISC, 3
+            *GET,var_Mj, ELEM, i, SMISC, 16            
+            disu(i)=n1u
+            disv(i)=n1v
+            disth(i)=n1theta
+            N(i)=(var_Ni+var_Nj)/2*1e-6
+            V(i)=(var_Vi+var_Vj)/2*1e-6
+            M(i)=(var_Mi+var_Mj)/2*1e-6
+            uu=n1u-n2u
+            th=n1theta-n2theta
+            d1=(uu-th*segR)/segL
+            d2=(uu+th*segR)/segL
+            hc(i)=uu/th
+             *if,hc(i),gt,segR,then
+                hc(i)=segR
+            *endif
+            *if,hc(i),lt,-segR,then
+                hc(i)=-segR
+            *endif
+            kc=segEc*segt
+            kt=de*kc
+            p1(i)=(uu-th*segR)*(kt+kc)/2/segL*1e-6+abs(uu-th*segR)*(kt-kc)/2/segL*1e-6
+            p2(i)=(uu+th*segR)*(kt+kc)/2/segL*1e-6+abs(uu+th*segR)*(kt-kc)/2/segL*1e-6
+            o1(i)=p1(i)*segt/kj*1e6*1e3
+            o2(i)=p2(i)*segt/kj*1e6*1e3
+            *if,o1(i),lt,0,then
+                    o1(i)=0.
+            *endif
+            *if,o2(i),lt,0,then
+                    o2(i)=0.
+            *endif
+        *enddo
+    *endif
+*enddo
+/post1
+/view,,-1,0,0
+esel, s, type, ,1
+ETABLE, NI, SMISC, 1!单元I点轴力
+ETABLE, NJ, SMISC, 14!单元J点轴力
+ETABLE, QI, SMISC, 6!单元I点剪力
+ETABLE, QJ, SMISC, 19!单元J点剪力
+ETABLE, MI, SMISC, 3!单元I点弯矩
+ETABLE, MJ, SMISC, 16!单元J点弯矩
+/TITLE,MTU
+PLLS,MI,MJ,1
+/IMAGE,SAVE,MTU,JPG
+/TITLE,NTU 
+PLLS,NI,NJ,1
+/IMAGE,SAVE,NTU,JPG
+/TITLE,QTU 
+PLLS,QI,QJ,1 
+/IMAGE,SAVE,QTU,JPG
+finish
+save,dataall
+
+*cfopen,result,txt
+*vwrite,disu(1,1),disv(1,1),disth(1,1),N(1,1),V(1,1),M(1,1),hc(1,1),o1(1,1),o2(1,1),p1(1,1),p2(1,1),l1(1,1),l2(1,1),EA(1,1),EI(1,1)
+(3f14.8,3f14.3,f14.3,2f14.4,2f14.3,2f14.3,2f20.0)
+*cfclos
